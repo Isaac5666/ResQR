@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function okStr(v, max) { return v is string && v.size() <= max; }
+
+    // What the public QR page is allowed to contain.
+    function validPublic(d) {
+      return d.keys().hasOnly(['uid', 'fullName', 'phone', 'foundMessage', 'bloodGroup', 'medicalNotes', 'contacts', 'updatedAt'])
+        && d.uid == request.auth.uid
+        && okStr(d.fullName, 80)
+        && okStr(d.phone, 20)
+        && okStr(d.foundMessage, 240)
+        && okStr(d.bloodGroup, 5)
+        && okStr(d.medicalNotes, 160)
+        && d.contacts is list
+        && d.contacts.size() <= 10;
+    }
+
+    // Private data: only the signed-in owner can read or write it.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+      match /contacts/{contactId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Public tag pages. Anyone can read ONE page if they know its secret id (the QR link).
+    // Nobody can list or search them. Only the owner can create, change or delete their page.
+    match /public/{slug} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() && validPublic(request.resource.data);
+      allow update: if signedIn() && resource.data.uid == request.auth.uid && validPublic(request.resource.data);
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+  }
+}
